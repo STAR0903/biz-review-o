@@ -1,51 +1,97 @@
-# Kratos Project Template
+# 电商评价微服务系统（Biz Review System）
 
-## Install Kratos
-```
-go install github.com/go-kratos/kratos/cmd/kratos/v2@latest
-```
-## Create a service
-```
-# Create a template project
-kratos new server
+[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://golang.org)  
+[![Kratos](https://img.shields.io/badge/Kratos-v2.7.0-3498db)](https://go-kratos.dev)  
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)]()
 
-cd server
-# Add a proto template
-kratos proto add api/server/server.proto
-# Generate the proto code
-kratos proto client api/server/server.proto
-# Generate the source code of service by proto file
-kratos proto server api/server/server.proto -t internal/service
+---
 
-go generate ./...
-go build -o ./bin/ ./...
-./bin/server -conf ./configs
-```
-## Generate other auxiliary files by Makefile
-```
-# Download and update dependencies
-make init
-# Generate API files (include: pb.go, http, grpc, validate, swagger) by proto file
-make api
-# Generate all files
-make all
-```
-## Automated Initialization (wire)
-```
-# install wire
-go get github.com/google/wire/cmd/wire
+## 项目性质：课程项目重构
 
-# generate wire
-cd cmd/server
-wire
-```
+本项目源自 **[七米课堂微服务实战课程](https://github.com/Q1mi/go-micro-service-and-cloud-native-course)** 的电商评价系统，**在保留原始 CQRS 架构思想的基础上，进行了深度重构与功能增强**，使其具备生产环境需求功能。
 
-## Docker
-```bash
-# build
-docker build -t <your-docker-image-name> .
+---
 
-# run
-docker run --rm -p 8000:8000 -p 9000:9000 -v </path/to/your/configs>:/data/conf <your-docker-image-name>
-```
+## 项目架构
+
+![项目架构图](https://raw.githubusercontent.com/STAR0903/go/main/%E5%BE%AE%E6%9C%8D%E5%8A%A1/image/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20251211022400_53_72.png)
+
+---
+
+## 系统功能全景
+
+- **C 端（用户）**
+  - 发表评价（图文/视频、多维评分、标签）
+  - **高性能查询商品评价列表**
+  - 查看个人评价
+
+- **B 端（商家）**
+  - 查看本店评价、回复用户、申诉恶意评价
+
+- **O 端（运营）**
+  - 审核评价与申诉、管理状态、添加运营备注
+
+- **Job 服务**
+  - 消费 Canal Binlog 事件 → **构建三表合一 ES 宽表** 
+  - 保障数据最终一致性
+
+---
+
+## 重构重点
+
+| 维度 | 原课程项目   | 本项目重构增强                                                               |
+|------|---------|-----------------------------------------------------------------------|
+| **ES 数据模型** | 无       | ✅ 设计并落地 **三表合一宽表**（评价 + 回复 + 申诉）                                      |
+| **ES 查询能力** | 仅店铺ID查询 | ✅ 支持 **多条件过滤（SPU、评价状态、时间范围、热点关键词）、全文检索、深度分页（`search_after`）、综合排序、聚合** |
+| **CDC 同步链路** | 简陋逻辑    | ✅ 通过 **Canal + Kafka + Job** 实现 **近实时、可靠、幂等** 的 MySQL → ES 同步         |
+| **中文搜索** | 未处理     | ✅ 配置 **ik 分词器**，支持评价内容中文全文检索                                          |
+| **高并发优化** | 基础缓存    | ✅ **Redis + singleflight** 防击穿                                        | 
+
+---
+
+
+
+## 核心技术实现
+
+### ✅ **Elasticsearch 三表宽表同步**（`biz-review-job`）
+- 将 `review_info`、`review_reply_info`、`review_appeal_info` 聚合为单个 ES 文档；
+- 宽表包含评价内容、评分、媒体、商家回复、申诉状态、审核意见等全量信息；
+- 使用 **ik_max_word** 分词器支持中文检索。
+
+> 实现：[`biz-review-job/internal/job/model/biz-review.json`](https://github.com/STAR0903/biz-review-job/blob/main/internal/job/model/biz-review.json)
+
+### ✅ **复杂 ES 查询引擎**（`biz-review-service`）
+- 支持组合条件：SPU、店铺、评分区间、标签、时间范围、审核状态；
+- 深度分页：`search_after` 替代 `from/size`，万级分页无性能衰减；
+- 排序：默认优先展示有图、视频或商家回复的高参考度评价。也可以选择时间、评分、回复数等因素排序；
+- 性能优化：`Bool Query` + `Filter Context`，避免相关性计算，提升缓存命中；
+- 高并发保护：`singleflight` 合并请求 + Redis 缓存。
+
+> 📄 实现：[`biz-review-service/internal/biz/review.go`](https://github.com/STAR0903/biz-review-service/blob/main/internal/biz/review.go)
+
+---
+
+## 技术栈
+
+- **微服务**：Kratos v2.7.0
+- **通信**：Protobuf + gRPC（内部） / HTTP（外部）
+- **写存储**：MySQL
+- **读存储**：Elasticsearch
+- **缓存**：Redis + singleflight
+- **数据同步**：Canal → Kafka → Job
+- **服务治理**：Consul
+- **工程化**：Wire、GORM Gen、protoc-gen-validate
+
+---
+
+## 相关仓库
+
+- 🔹 [`biz-review-service`](https://github.com/STAR0903/biz-review-service) — 评价服务端
+- 🔹 [`biz-review-api`](https://github.com/STAR0903/biz-review-api) — 评价服务端 API 定义
+- 🔹 [`biz-review-c`](https://github.com/STAR0903/biz-review-c) — 用户端
+- 🔹 [`biz-review-b`](https://github.com/STAR0903/biz-review-b) — 商家端
+- 🔹 [`biz-review-o`](https://github.com/STAR0903/biz-review-o) — 运营端
+- 🔹 [`biz-review-job`](https://github.com/STAR0903/biz-review-job) — 评价服务端同步任务
+
+---
 
